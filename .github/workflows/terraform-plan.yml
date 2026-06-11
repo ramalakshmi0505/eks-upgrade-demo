@@ -1,0 +1,75 @@
+name: terraform-plan
+
+# Runs terraform plan on every pull request that touches the config,
+# then posts the plan as a comment so the upgrade is reviewed before merge.
+on:
+  pull_request:
+    paths:
+      - "**.tf"
+      - ".github/workflows/terraform-plan.yml"
+
+permissions:
+  id-token: write # request the OIDC token to assume the AWS role
+  contents: read
+  pull-requests: write # post the plan as a PR comment
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # No long-lived AWS keys. GitHub gets short-lived credentials via OIDC.
+      # Set AWS_PLAN_ROLE_ARN (a read-only-ish plan role) as a repo secret,
+      # and AWS_REGION as a repo variable.
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        run: terraform init -input=false
+
+      - name: Terraform format check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform validate
+        run: terraform validate -no-color
+
+      - name: Terraform plan
+        id: plan
+        run: terraform plan -no-color -input=false
+        continue-on-error: true
+
+      - name: Comment plan on the PR
+        uses: actions/github-script@v7
+        env:
+          PLAN: ${{ steps.plan.outputs.stdout }}
+        with:
+          script: |
+            const plan = (process.env.PLAN || "").substring(0, 60000);
+            const body = [
+              "### Terraform plan",
+              "",
+              "```hcl",
+              plan,
+              "```",
+              "",
+              "_Review the diff above before approving. No change reaches the cluster until this merges._",
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail if plan errored
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
