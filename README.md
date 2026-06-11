@@ -1,4 +1,4 @@
-# eks-upgrade-demo
+# EKS-upgrade-demo
 
 A small, opinionated demo of how to upgrade an Amazon EKS cluster the boring
 way: as a one-line change, reviewed as a pull request, with the plan attached.
